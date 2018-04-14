@@ -1,0 +1,247 @@
+---
+title: "W241 Final Project Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load the raw data
+
+```{r}
+library(data.table)
+d <- fread('./w241_survey_responses.csv')
+head(d)
+```
+
+# Remove unnecessary columns
+```{r}
+colnames(d)
+
+not.needed <- c("StartDate", "EndDate", "Status", "IPAddress", "Progress", "Duration (in seconds)", 
+                "Finished", "RecordedDate", "ResponseId", "RecipientLastName", "RecipientFirstName", "RecipientEmail", 
+                "ExternalReference", "LocationLatitude", "LocationLongitude", "DistributionChannel", "UserLanguage", 
+                "Q3_First Click", "Q3_Last Click", "Q3_Page Submit", "Q3_Click Count", 
+                "Q34_First Click", "Q34_Last Click", "Q34_Page Submit", "Q34_Click Count", 
+                "Q37_First Click", "Q37_Last Click", "Q37_Page Submit", "Q37_Click Count", 
+                "Q12_First Click", "Q12_Last Click", "Q12_Page Submit", "Q12_Click Count", 
+                "Q16_First Click", "Q16_Last Click", "Q16_Page Submit", "Q16_Click Count", 
+                "Q19_First Click", "Q19_Last Click", "Q19_Page Submit", "Q19_Click Count", "MTurkCode", "Q32")
+d[, (not.needed) := NULL]
+```
+
+# Rename columns to be more descriptive
+```{r}
+q.names <- c("gender", "state", "education", "served_military", 
+             'weather', 'terrorists', 'marines', 'video_topic_check', 
+             'us_involved', 'us_send_aid', 'us_send_troops', 
+             'raise_tax_rate', 'join_armed_forces')
+
+setnames(d, q.names)
+```
+
+# Convert weather, terrorists and marines to dummy variables
+# Treat non-compliers as compliers
+```{r}
+# Replace NA with 0
+# NA means that the subject did not see the video in question
+d[is.na(weather), weather := 0]
+d[is.na(terrorists), terrorists := 0]
+d[is.na(marines), marines := 0]
+```
+
+# Get a descriptive summary of data
+
+```{r}
+library(psych)
+
+for (q.n in (q.names)) {
+  hist(d[, get(q.n)], xlab = (q.n), freq = FALSE )
+}
+```
+# Check how many subjects selected the wrong video topic
+# And drop their responses from the data
+```{r}
+# Topic choices: 
+# 1. marines
+# 2. weather
+# 3. nfl draft
+# 4. terrorists
+# 5. scott foster 
+
+sum(d$video_topic_check == 3)
+sum(d$video_topic_check == 5)
+
+d <- d[video_topic_check %in% c(1, 2, 4)]
+```
+
+# Treat non-compliers as compliers
+```{r}
+# 1 subject said that they did not watch the marines video.
+# 1 subject said that they did not watch the terrorists video.
+# We will count both of them as treatment compliers.
+
+d[weather == 2, weather := 1]
+d[terrorists == 2, terrorists := 1]
+d[marines == 2, marines := 1]
+
+sum(d$weather) # 78 
+sum(d$terrorists) # 96
+sum(d$marines) # 97
+
+```
+
+# Convert gender, state, served_military to factors (aka. dummy variables)
+```{r}
+d$gender <- as.factor(d$gender)
+d$state <- as.factor(d$state)
+d$served_military <- as.factor(d$served_military)
+```
+
+# Multivariate regression
+```{r}
+deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
+            'raise_tax_rate', 'join_armed_forces')
+indeps <- c("gender", "state", "education", "served_military")
+treats <- c('weather', 'terrorists', 'marines', 'treats')
+
+m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ terrorists + marines, data = d)
+
+# library(mvinfluence)
+
+# influence(m, TRUE, 1)
+
+```
+
+# Create a column of treatments
+```{r}
+d$treatment <- ifelse(d$weather == 1, 0, 0)
+d$treatment <- ifelse(d$terrorists == 1, 1, d$treatment)
+d$treatment <- ifelse(d$marines == 1, 2, d$treatment)
+# d$treatment <- factor(d$treatment)
+```
+
+# Randomization Inference
+```{r}
+
+deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
+            'raise_tax_rate', 'join_armed_forces')
+indeps <- c("gender", "state", "education", "served_military")
+treats <- c('weather', 'terrorists', 'marines', 'treats')
+
+df <- data.frame(d)
+df[, deps] <- 6 - df[, deps]
+df
+
+weather.means <- apply(df[df$treatment == 0, deps], 2, mean)
+terrorists.means <- apply(df[df$treatment == 1, deps], 2, mean)
+marines.means <- apply(df[df$treatment == 2, deps], 2, mean)
+
+deps.means <- data.frame(weather.means, terrorists.means, marines.means)
+deps.means$TminusW <- deps.means$terrorists.means - deps.means$weather.means
+deps.means$MminusW <- deps.means$marines.means - deps.means$weather.means
+deps.means$TminusM <- deps.means$terrorists.means - deps.means$marines.means
+deps.means
+
+RandomInference <- function(vec, ate, n.trials) {
+  set.seed(1234)
+  rands <- replicate(n.trials, sample(c(TRUE, FALSE), length(vec), replace = TRUE))
+
+  treats <- apply(rands, 2, FUN = function(x) {return(mean(vec[x]))})
+  controls <- apply(rands, 2, FUN = function(x) {return(mean(vec[!x]))})
+  rand.ate <- treats - controls
+  p <- sum(rand.ate > ate) / length(rand.ate)
+  std.err <- sd(rand.ate) / sqrt(length(rand.ate))
+  low.bound <- ate - 1.96 * std.err
+  high.bound <- ate + 1.96 * std.err
+  
+  
+  return(c(ate, std.err, p, low.bound, high.bound))
+}
+```
+
+# us_involved
+```{r}
+print("us_involved")
+
+n.t = 10000
+
+m.ate <- deps.means$TminusW[1] 
+res <- RandomInference(df$us_involved, m.ate, n.t)
+cat('Terror vs. Weather: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
+
+m.ate <- deps.means$MminusW[1]
+res <- RandomInference(df$us_involved, m.ate, n.t)
+cat('Marines vs. Weather: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
+
+
+m.ate <- deps.means$TminusM[1]
+res <- RandomInference(df$us_involved, m.ate, n.t)
+cat('Terror vs. Marines: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
+
+```
+# All with correction for multiple comparisons
+```{r}
+deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
+            'raise_tax_rate', 'join_armed_forces')
+n.t = 10000
+
+EmbellishP <- function(p.val) {
+    if(p.val*15 <= 0.01) {
+    return(paste0(p.val, '**'))
+    }
+  
+  if(p.val*15 <= 0.05) {
+    return(paste0(p.val, '*'))
+  } 
+  
+  return(p.val)
+}
+
+for (row.name in deps) {
+  deps.sub <- deps.means[deps.means$id == row.name,]
+  
+  cat('######### ', row.name, ' ###########', '\n')
+  m.ate <- deps.sub[deps.sub$id == row.name, 'TminusW']
+  res <- RandomInference(df$us_involved, m.ate, n.t)
+  p <- EmbellishP(res[3])
+  cat(row.name, ': Terror vs. Weather: ate:', res[1], paste0('(', res[2], ')'), 'p-value: ', p, 'ci: ', res[4], res[5], '\n')
+  
+  m.ate <- deps.sub[deps.sub$id == row.name, 'MminusW']
+  res <- RandomInference(df$us_involved, m.ate, n.t)
+  p <- EmbellishP(res[3])
+  cat(row.name, ': Marines vs. Weather: ate:', res[1], paste0('(', res[2], ')'), 'p-value: ', p, 'ci: ', res[4], res[5], '\n')
+  
+  m.ate <- deps.sub[deps.sub$id == row.name, 'TminusM']
+  res <- RandomInference(df$us_involved, m.ate, n.t)
+  p <- EmbellishP(res[3])
+  cat(row.name, ': Terror vs. Marines: ate:', res[1], paste0('(', res[2], ')'), 'p-value: ', p, 'ci: ', res[4], res[5], '\n')
+  
+  cat('####################################\n\n')
+}
+
+```
+
+# Results
+
+**After correcting for multiple comparisons i.e. 3 treatments x 5 dependent variables, we see that only the following results are significant.**
+
+1. **us_send_aid (placebo value 3.410256)** : Marines vs. Weather: ate: 0.5175786 (0.00135190409440195) p-value:  1e-04** ci:  0.5149289 0.5202284. For sending aid, the average effect was to move the sample from being inbetween "Neither in favor nor opposed" to "Somewhat in favor".
+
+
+2. **join_armed_forces (placebo value 1.923077)** : Marines vs. Weather: ate: 0.5717684 (0.00135190409440195) p-value:  0** ci:  0.5691187 0.5744182. For joining the armed forces, the average effect was to move the sample from "Somewhat opposed" to "Neither in favor nor opposed".
+
+**That is, subjects who saw the marines video were likely to increase their support for sending Aid to countries fighting terrorists, and joining armed forces, by approx. half a category.**
+
+
+# MANOVA
+```{r}
+library(car)
+m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ terrorists + marines, data = df)
+summary(m)
+summary(Anova(m))
+
+```
+
+
