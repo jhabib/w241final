@@ -1,6 +1,12 @@
 ---
 title: "W241 Final Project Analysis"
-output: html_document
+output:
+  word_document:
+    toc: yes
+    toc_depth: '3'
+  html_document:
+    toc: yes
+    toc_depth: 3
 ---
 
 ```{r setup, include=FALSE}
@@ -132,7 +138,6 @@ treats <- c('weather', 'terrorists', 'marines', 'treats')
 
 df <- data.frame(d)
 df[, deps] <- 6 - df[, deps]
-df
 
 weather.means <- apply(df[df$treatment == 0, deps], 2, mean)
 terrorists.means <- apply(df[df$treatment == 1, deps], 2, mean)
@@ -143,6 +148,7 @@ deps.means$TminusW <- deps.means$terrorists.means - deps.means$weather.means
 deps.means$MminusW <- deps.means$marines.means - deps.means$weather.means
 deps.means$TminusM <- deps.means$terrorists.means - deps.means$marines.means
 deps.means
+deps.means$id <- row.names(deps.means)
 
 RandomInference <- function(vec, ate, n.trials) {
   set.seed(1234)
@@ -161,26 +167,6 @@ RandomInference <- function(vec, ate, n.trials) {
 }
 ```
 
-# us_involved
-```{r}
-print("us_involved")
-
-n.t = 10000
-
-m.ate <- deps.means$TminusW[1] 
-res <- RandomInference(df$us_involved, m.ate, n.t)
-cat('Terror vs. Weather: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
-
-m.ate <- deps.means$MminusW[1]
-res <- RandomInference(df$us_involved, m.ate, n.t)
-cat('Marines vs. Weather: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
-
-
-m.ate <- deps.means$TminusM[1]
-res <- RandomInference(df$us_involved, m.ate, n.t)
-cat('Terror vs. Marines: ate:', res[1], '(', res[2], ')', 'p-value: ', res[3], 'ci: ', res[4], res[5], '\n')
-
-```
 # All with correction for multiple comparisons
 ```{r}
 deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
@@ -205,6 +191,7 @@ for (row.name in deps) {
   cat('######### ', row.name, ' ###########', '\n')
   m.ate <- deps.sub[deps.sub$id == row.name, 'TminusW']
   res <- RandomInference(df$us_involved, m.ate, n.t)
+  cat(res[3])
   p <- EmbellishP(res[3])
   cat(row.name, ': Terror vs. Weather: ate:', res[1], paste0('(', res[2], ')'), 'p-value: ', p, 'ci: ', res[4], res[5], '\n')
   
