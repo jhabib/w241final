@@ -1,12 +1,15 @@
 ---
 title: "W241 Final Project Analysis"
 output:
-  word_document:
+  pdf_document:
+    latex_engine: xelatex
     toc: yes
-    toc_depth: '3'
   html_document:
     toc: yes
     toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: '3'
 ---
 
 ```{r setup, include=FALSE}
@@ -18,13 +21,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(data.table)
 d <- fread('./w241_survey_responses.csv')
-head(d)
 ```
 
 # Remove unnecessary columns
 ```{r}
-colnames(d)
-
 not.needed <- c("StartDate", "EndDate", "Status", "IPAddress", "Progress", "Duration (in seconds)", 
                 "Finished", "RecordedDate", "ResponseId", "RecipientLastName", "RecipientFirstName", "RecipientEmail", 
                 "ExternalReference", "LocationLatitude", "LocationLongitude", "DistributionChannel", "UserLanguage", 
@@ -57,15 +57,25 @@ d[is.na(terrorists), terrorists := 0]
 d[is.na(marines), marines := 0]
 ```
 
+```{r}
+deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
+            'raise_tax_rate', 'join_armed_forces')
+indeps <- c("gender", "state", "education", "served_military")
+treats <- c('weather', 'terrorists', 'marines', 'treats')
+
+# Invert responses so that 5 means strongly in favor, and 1 means strongly opposed
+d[, deps] <- 6 - d[, deps, with=FALSE]
+```
+
 # Get a descriptive summary of data
 
 ```{r}
 library(psych)
-
 for (q.n in (q.names)) {
-  hist(d[, get(q.n)], xlab = (q.n), freq = FALSE )
+  hist(d[, get(q.n)], xlab = (q.n), freq = FALSE, breaks = unique(c(0, d[, get(q.n)])))
 }
 ```
+
 # Check how many subjects selected the wrong video topic
 # And drop their responses from the data
 ```{r}
@@ -78,7 +88,6 @@ for (q.n in (q.names)) {
 
 sum(d$video_topic_check == 3)
 sum(d$video_topic_check == 5)
-
 d <- d[video_topic_check %in% c(1, 2, 4)]
 ```
 
@@ -98,11 +107,30 @@ sum(d$marines) # 97
 
 ```
 
-# Convert gender, state, served_military to factors (aka. dummy variables)
+# Convert gender, state, served_military, education to factors (aka. dummy variables)
 ```{r}
 d$gender <- as.factor(d$gender)
 d$state <- as.factor(d$state)
 d$served_military <- as.factor(d$served_military)
+d$education <- as.factor(d$education)
+```
+
+# Covariate balance check
+```{r}
+library(papeR)
+
+deps <- c('us_involved', 'us_send_aid', 'us_send_troops', 
+            'raise_tax_rate', 'join_armed_forces')
+indeps <- c("gender", "state", "education", "served_military")
+treats <- c('weather', 'terrorists', 'marines', 'treats')
+
+for (dep in deps) {
+  options(digits = 2)
+  cat('###########', dep, '###########\n')
+  m <- lm(get(dep) ~ gender + state + education + served_military, data = d)
+  print(summary(m))
+}
+
 ```
 
 # Multivariate regression
@@ -112,7 +140,13 @@ deps <- c('us_involved', 'us_send_aid', 'us_send_troops',
 indeps <- c("gender", "state", "education", "served_military")
 treats <- c('weather', 'terrorists', 'marines', 'treats')
 
-m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ terrorists + marines, data = d)
+dlm <- data.frame(d)
+
+dlm$served_military <- ifelse(dlm$served_military == 2, 0, 1)
+dlm$trade_ed <- ifelse(dlm$education == 4, 1, 0)
+
+m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ (terrorists + marines)*served_military, data = dlm)
+summary(m)
 
 # library(mvinfluence)
 
@@ -128,6 +162,7 @@ d$treatment <- ifelse(d$marines == 1, 2, d$treatment)
 # d$treatment <- factor(d$treatment)
 ```
 
+
 # Randomization Inference
 ```{r}
 
@@ -137,7 +172,6 @@ indeps <- c("gender", "state", "education", "served_military")
 treats <- c('weather', 'terrorists', 'marines', 'treats')
 
 df <- data.frame(d)
-df[, deps] <- 6 - df[, deps]
 
 weather.means <- apply(df[df$treatment == 0, deps], 2, mean)
 terrorists.means <- apply(df[df$treatment == 1, deps], 2, mean)
@@ -191,7 +225,6 @@ for (row.name in deps) {
   cat('######### ', row.name, ' ###########', '\n')
   m.ate <- deps.sub[deps.sub$id == row.name, 'TminusW']
   res <- RandomInference(df$us_involved, m.ate, n.t)
-  cat(res[3])
   p <- EmbellishP(res[3])
   cat(row.name, ': Terror vs. Weather: ate:', res[1], paste0('(', res[2], ')'), 'p-value: ', p, 'ci: ', res[4], res[5], '\n')
   
@@ -210,7 +243,7 @@ for (row.name in deps) {
 
 ```
 
-# Results
+# Randomization Inference Results
 
 **After correcting for multiple comparisons i.e. 3 treatments x 5 dependent variables, we see that only the following results are significant.**
 
@@ -225,10 +258,8 @@ for (row.name in deps) {
 # MANOVA
 ```{r}
 library(car)
-m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ terrorists + marines, data = df)
+m <- lm( cbind(us_involved, us_send_aid, us_send_troops, raise_tax_rate, join_armed_forces) ~ (terrorists + marines)*served_military, data = dlm)
 summary(m)
 summary(Anova(m))
-
 ```
-
 
